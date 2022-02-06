@@ -2,9 +2,8 @@ package proxy
 
 import (
 	"context"
-	"errors"
-	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -41,8 +40,7 @@ func NewImageReceiver() ImageReceiver {
 
 func (ir *ImageReceiver) Receive(imageUrl string, headers http.Header) (*http.Response, error) {
 	// building request
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
 
 	imageRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, imageUrl, nil)
 	if err != nil {
@@ -80,10 +78,7 @@ func (ir *ImageReceiver) Receive(imageUrl string, headers http.Header) (*http.Re
 
 	err = checkResponse(response)
 	if err != nil {
-		return nil, &StatusError{
-			Err:  err,
-			Code: http.StatusServiceUnavailable,
-		}
+		return nil, err
 	}
 
 	return response, nil
@@ -98,32 +93,33 @@ func checkResponse(response *http.Response) error {
 		}
 	}
 
-	// checking size
-	body := response.Body
-	defer body.Close()
-
-	buf := make([]byte, maxImageSize)
-
-	_, err := io.ReadFull(body, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return &StatusError{
-			Err:  err,
-			Code: http.StatusServiceUnavailable,
+	// checking Content-Length
+	if headerContentLength, ok := response.Header["Content-Length"]; ok {
+		contentLength, err := strconv.Atoi(headerContentLength[0])
+		if err != nil {
+			return &StatusError{
+				Err:  err,
+				Code: http.StatusServiceUnavailable,
+			}
 		}
-	}
 
-	if err == nil {
-		return &StatusError{
-			Err:  ErrMaxSizeExceed,
-			Code: http.StatusUnprocessableEntity,
+		if contentLength > maxImageSize {
+			return &StatusError{
+				Err:  ErrMaxSizeExceed,
+				Code: http.StatusUnprocessableEntity,
+			}
 		}
 	}
 
 	// checking type
-	if _, ok := imageTypes[http.DetectContentType(buf)]; !ok {
-		return &StatusError{
-			Err:  ErrUnsupportedFormat,
-			Code: http.StatusUnprocessableEntity,
+	if contentType, ok := response.Header["Content-Type"]; ok {
+		responseType := contentType[0]
+
+		if _, ok := imageTypes[responseType]; !ok {
+			return &StatusError{
+				Err:  ErrUnsupportedFormat,
+				Code: http.StatusUnprocessableEntity,
+			}
 		}
 	}
 
